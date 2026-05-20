@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { program } from "commander";
+import { Option, program } from "commander";
 import * as fsSync from "fs";
 import path from "path";
 import { getActualWorkingDirectory } from "./utils";
@@ -151,6 +151,12 @@ if (require.main === module) {
     .option("-o, --output <file>", "Output file name", "codebase.md")
     .option("--no-default-ignores", "Disable default ignore patterns")
     .option("--whitespace-removal", "Enable whitespace removal")
+    .addOption(
+      new Option(
+        "--remove-comments",
+        "Alias for --whitespace-removal",
+      ).hideHelp(),
+    )
     .option(
       "--show-output-files [sort]",
       "Display a list of files included in the output, optionally sorted by size ('sort')",
@@ -165,12 +171,49 @@ if (require.main === module) {
       "Custom minify file name",
       ".aidigestminify",
     )
+    .addOption(
+      new Option(
+        "--minify",
+        "Compatibility option; minify patterns are applied automatically",
+      ).hideHelp(),
+    )
+    .option(
+      "--stdout",
+      "Write digest content to stdout instead of creating an output file",
+    )
     .option("--watch", "Watch for file changes and rebuild automatically")
     .action(async (options) => {
       const inputDirs = options.input.map((dir: string) => path.resolve(dir));
       const outputFile = path.isAbsolute(options.output)
         ? options.output
         : path.join(getActualWorkingDirectory(), options.output);
+      const removeWhitespaceFlag =
+        options.whitespaceRemoval || options.removeComments;
+
+      if (options.stdout && options.watch) {
+        console.error("Error: --stdout cannot be combined with --watch.");
+        process.exit(1);
+      }
+
+      if (options.stdout) {
+        try {
+          const { content } = await generateDigestContent({
+            inputDirs,
+            outputFilePath: outputFile,
+            useDefaultIgnores: options.defaultIgnores,
+            removeWhitespaceFlag,
+            ignoreFile: options.ignoreFile,
+            minifyFile: options.minifyFile,
+            silent: true,
+          });
+
+          process.stdout.write(content);
+        } catch (error) {
+          console.error("Error generating digest content:", error);
+          process.exit(1);
+        }
+        return;
+      }
 
       if (options.watch) {
         // Run in watch mode
@@ -178,7 +221,7 @@ if (require.main === module) {
           inputDirs,
           outputFile,
           options.defaultIgnores,
-          options.whitespaceRemoval,
+          removeWhitespaceFlag,
           options.showOutputFiles,
           options.ignoreFile,
           options.minifyFile,
@@ -190,7 +233,7 @@ if (require.main === module) {
           inputDirs,
           outputFile,
           options.defaultIgnores,
-          options.whitespaceRemoval,
+          removeWhitespaceFlag,
           options.showOutputFiles,
           options.ignoreFile,
           options.minifyFile,
