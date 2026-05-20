@@ -41,8 +41,10 @@ For best results, re-upload the Markdown file before starting a new chat session
 
 - `-i, --input <directories...>`: Specify input directories (multiple allowed, default: current directory)
 - `-o, --output <file>`: Specify output file (default: codebase.md)
+- `--stdout`: Write digest content to stdout without creating or modifying an output file. Cannot be combined with `--watch`; using both options exits with an error on stderr.
 - `--no-default-ignores`: Disable default ignore patterns
 - `--whitespace-removal`: Enable whitespace removal
+- `--minify`: Alias for `--whitespace-removal`
 - `--show-output-files [sort]`: Display a list of files with size statistics and bar charts. Add `sort` to sort by file size.
 - `--ignore-file <file>`: Specify a custom ignore file (default: .aidigestignore)
 - `--minify-file <file>`: Specify a custom minify file (default: .aidigestminify)
@@ -95,7 +97,15 @@ For best results, re-upload the Markdown file before starting a new chat session
    npx ai-digest --minify-file .myminifypatterns
    ```
 
-8. Combine multiple options:
+8. Write digest content to stdout:
+
+   ```bash
+   npx ai-digest --stdout -i /path/to/your/project
+   ```
+
+   `--stdout` is intended for scripts and pipelines. It writes only digest content to stdout, does not create `codebase.md`, and reports fatal errors on stderr. It is incompatible with `--watch`; `npx ai-digest --stdout --watch` exits with a non-zero status and prints a validation error to stderr.
+
+9. Combine multiple options:
 
    ```bash
    npx ai-digest -i /path/to/your/project -o project_summary.md --whitespace-removal --show-output-files sort --watch
