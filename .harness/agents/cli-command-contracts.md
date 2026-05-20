@@ -39,6 +39,13 @@ exit-code changes, stdout/stderr inversion, argument forwarding, or flag
 parsing behavior changes, remain in scope at warning/error severity when the
 reviewed diff supports them.
 
+Tests and docs may also live in a different progressive-review cluster. Do not
+lower the overall grade to C/D/F for "no visible tests", "missing tests", or
+"no test coverage" solely because test files are absent from this cluster. Make
+that a C or worse only when the provided diff/context, full PR summary, or
+test-stage evidence shows the command contract is actually untested. If coverage
+is merely not visible from this cluster, mention the uncertainty as info.
+
 ## What to check
 
 - New commands and flags have a clear contract: accepted inputs, defaults,
@@ -72,6 +79,6 @@ reviewed diff supports them.
   existing command's default stdout/stderr bytes without an explicit
   intentional default-behavior change, or leaves package `bin`/dist wiring
   inconsistent with the documented command.
-- **C/warning:** minor help text, output consistency, or narrow test coverage
-  gap.
+- **C/warning:** minor help text, output consistency, or a test coverage gap
+  proven by the provided diff/context rather than by cluster absence alone.
 - **A:** no command-contract concerns in the diff.
