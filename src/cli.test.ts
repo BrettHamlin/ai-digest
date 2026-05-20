@@ -666,6 +666,32 @@ describe("AI Digest CLI", () => {
       }
     }, 15000);
 
+    it("does not overwrite an existing custom output file in stdout mode", async () => {
+      //harness:criterion=c-stdout-custom-output-flag-ignored-or-warned,c-stdout-no-file-created
+      const tempDir = await createStdoutFixture();
+      const customOutputFile = path.join(
+        os.tmpdir(),
+        `ai-digest-stdout-existing-custom-${Date.now()}.md`
+      );
+      const existingContent = "existing custom digest should remain untouched\n";
+
+      try {
+        await fs.writeFile(customOutputFile, existingContent);
+
+        const { stdout } = await runCLI(
+          `--stdout -o ${shellQuote(customOutputFile)} ${shellQuote(tempDir)}`
+        );
+        const afterContent = await fs.readFile(customOutputFile, "utf-8");
+
+        expect(stdout).toContain("# alpha.ts");
+        expect(stdout).not.toMatch(LOG_OUTPUT_PATTERN);
+        expect(afterContent).toBe(existingContent);
+      } finally {
+        await fs.unlink(customOutputFile).catch(() => {});
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
     it("still writes codebase.md and emits logs when stdout is omitted", async () => {
       //harness:criterion=c-no-stdout-default-file-still-created,c-no-stdout-logs-still-visible
       const tempDir = await createStdoutFixture();

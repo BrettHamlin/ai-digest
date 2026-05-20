@@ -144,9 +144,10 @@ export async function processFiles(options: {
       allMinifyPatterns[dir] = await readIgnoreFile(dir, minifyFile, silent);
     }
 
-    const defaultIgnore = useDefaultIgnores
-      ? ignore().add([...DEFAULT_IGNORES, ...additionalDefaultIgnores])
-      : ignore();
+    const defaultIgnore = ignore().add([
+      ...(useDefaultIgnores ? DEFAULT_IGNORES : []),
+      ...additionalDefaultIgnores,
+    ]);
 
     // Create custom ignore filter for each directory
     const customIgnores: Record<string, IgnoreInstance> = {};
@@ -269,7 +270,8 @@ export async function processFiles(options: {
 
       if (
         (outputAbsPath && fullPath === outputAbsPath) ||
-        (useDefaultIgnores && defaultIgnore.ignores(relativePath))
+        ((useDefaultIgnores || additionalDefaultIgnores.length > 0) &&
+          defaultIgnore.ignores(relativePath))
       ) {
         defaultIgnoredCount++;
       } else if (customIgnores[sourceDir].ignores(relativePath)) {

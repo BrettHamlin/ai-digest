@@ -220,6 +220,10 @@ if (require.main === module) {
             ignoreFile: options.ignoreFile,
             minifyFile: options.minifyFile,
             silent: true,
+            additionalDefaultIgnores: [
+              options.ignoreFile,
+              options.minifyFile,
+            ],
           });
 
           process.stdout.write(content);
