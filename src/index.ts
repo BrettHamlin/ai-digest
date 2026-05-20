@@ -3,7 +3,7 @@
 import { program } from "commander";
 import * as fsSync from "fs";
 import path from "path";
-import { getActualWorkingDirectory } from "./utils";
+import { formatLog, getActualWorkingDirectory } from "./utils";
 import {
   processFiles,
   generateDigestContent,
@@ -13,6 +13,29 @@ import {
   getFileStats,
 } from "./digest";
 import { MinifyFileDescriptionCallback, ProcessedFile } from "./types";
+
+type CliOptions = {
+  input: string[];
+  output: string;
+  stdout?: boolean;
+  defaultIgnores: boolean;
+  whitespaceRemoval?: boolean;
+  minify?: boolean;
+  showOutputFiles?: string | boolean;
+  ignoreFile: string;
+  minifyFile: string;
+  watch?: boolean;
+};
+
+function validateInputDirs(inputDirs: string[]): void {
+  for (const inputDir of inputDirs) {
+    if (!fsSync.existsSync(inputDir)) {
+      throw new Error(`Input path not found: ${inputDir}`);
+    }
+
+    fsSync.accessSync(inputDir, fsSync.constants.R_OK);
+  }
+}
 
 // Main library function
 export async function generateDigest(
@@ -149,8 +172,13 @@ if (require.main === module) {
       [getActualWorkingDirectory()],
     )
     .option("-o, --output <file>", "Output file name", "codebase.md")
+    .option(
+      "--stdout",
+      "Write generated digest content to stdout without creating an output file",
+    )
     .option("--no-default-ignores", "Disable default ignore patterns")
     .option("--whitespace-removal", "Enable whitespace removal")
+    .option("--minify", "Alias for --whitespace-removal")
     .option(
       "--show-output-files [sort]",
       "Display a list of files included in the output, optionally sorted by size ('sort')",
@@ -166,11 +194,60 @@ if (require.main === module) {
       ".aidigestminify",
     )
     .option("--watch", "Watch for file changes and rebuild automatically")
-    .action(async (options) => {
-      const inputDirs = options.input.map((dir: string) => path.resolve(dir));
+    .argument("[directories...]", "Input directories")
+    .action(async (directories: string[], options: CliOptions) => {
+      if (options.stdout && options.watch) {
+        console.error(
+          "Error: --stdout cannot be combined with --watch because watch mode continuously rebuilds files.",
+        );
+        process.exit(1);
+      }
+
+      const selectedInputDirs =
+        directories.length > 0 ? directories : options.input;
+      const inputDirs = selectedInputDirs.map((dir: string) =>
+        path.resolve(dir),
+      );
       const outputFile = path.isAbsolute(options.output)
         ? options.output
         : path.join(getActualWorkingDirectory(), options.output);
+      const removeWhitespaceFlag = Boolean(
+        options.whitespaceRemoval || options.minify,
+      );
+      const showOutputFiles = options.showOutputFiles ?? false;
+
+      if (options.stdout) {
+        try {
+          validateInputDirs(inputDirs);
+
+          const { content } = await generateDigestContent({
+            inputDirs,
+            outputFilePath: outputFile,
+            useDefaultIgnores: options.defaultIgnores,
+            removeWhitespaceFlag,
+            ignoreFile: options.ignoreFile,
+            minifyFile: options.minifyFile,
+            silent: true,
+          });
+
+          await new Promise<void>((resolve, reject) => {
+            process.stdout.write(content, (error?: Error | null) => {
+              if (error) {
+                reject(error);
+              } else {
+                resolve();
+              }
+            });
+          });
+        } catch (error) {
+          console.error(
+            formatLog("Error generating digest content:", "❌"),
+            error,
+          );
+          process.exit(1);
+        }
+        return;
+      }
 
       if (options.watch) {
         // Run in watch mode
@@ -178,8 +255,8 @@ if (require.main === module) {
           inputDirs,
           outputFile,
           options.defaultIgnores,
-          options.whitespaceRemoval,
-          options.showOutputFiles,
+          removeWhitespaceFlag,
+          showOutputFiles,
           options.ignoreFile,
           options.minifyFile,
           process.env.NODE_ENV === "test", // Pass test mode flag based on environment
@@ -190,8 +267,8 @@ if (require.main === module) {
           inputDirs,
           outputFile,
           options.defaultIgnores,
-          options.whitespaceRemoval,
-          options.showOutputFiles,
+          removeWhitespaceFlag,
+          showOutputFiles,
           options.ignoreFile,
           options.minifyFile,
         );

@@ -125,6 +125,17 @@ build/*
 - Watch mode monitors `.aidigestminify` file for changes
 - CLI option `--minify-file` to specify custom minify file name
 
+## Feature: CLI stdout output (v1.6.0)
+Added `--stdout` for scripts and pipelines that need digest content without filesystem side effects. In stdout mode, the CLI generates the same digest content as file output, keeps the resolved output path excluded from file selection, suppresses progress and summary logs, and writes only digest bytes to stdout.
+
+**Implementation details:**
+- CLI option `--stdout` calls `generateDigestContent()` with `silent: true`
+- Digest content is written with `process.stdout.write()` instead of `aggregateFiles()`
+- No output file is created or modified in stdout mode
+- Fatal errors are reported on stderr
+- `--stdout` cannot be combined with `--watch`; the CLI exits non-zero with a validation error
+- CLI option `--minify` is supported as an alias for `--whitespace-removal`
+
 ## Library Usage
 The tool exports functions for programmatic use:
 - `generateDigest(options)` - Returns content string when `outputFile: null`, writes file otherwise
