@@ -165,12 +165,38 @@ if (require.main === module) {
       "Custom minify file name",
       ".aidigestminify",
     )
+    .option("--stdout", "Write digest content to stdout instead of a file")
     .option("--watch", "Watch for file changes and rebuild automatically")
     .action(async (options) => {
       const inputDirs = options.input.map((dir: string) => path.resolve(dir));
       const outputFile = path.isAbsolute(options.output)
         ? options.output
         : path.join(getActualWorkingDirectory(), options.output);
+
+      if (options.stdout && options.watch) {
+        console.error("Error: --stdout cannot be combined with --watch.");
+        process.exit(1);
+      }
+
+      if (options.stdout) {
+        try {
+          const { content } = await generateDigestContent({
+            inputDirs,
+            outputFilePath: null,
+            useDefaultIgnores: options.defaultIgnores,
+            removeWhitespaceFlag: options.whitespaceRemoval,
+            ignoreFile: options.ignoreFile,
+            minifyFile: options.minifyFile,
+            silent: true,
+          });
+
+          process.stdout.write(content);
+        } catch (error) {
+          console.error("Error generating digest content:", error);
+          process.exit(1);
+        }
+        return;
+      }
 
       if (options.watch) {
         // Run in watch mode

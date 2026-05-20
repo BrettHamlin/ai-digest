@@ -1,8 +1,9 @@
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import fs from "fs/promises";
 import os from "os";
+import { generateDigestContent } from "./digest";
 
 const execAsync = promisify(exec);
 
@@ -22,6 +23,49 @@ const runCLIWithEnv = async (
     .join(" ");
   return execAsync(`${envVars} ts-node ${cliPath} ${args}`);
 };
+
+const runCLIProcess = async (
+  args: string[] = [],
+  options: { cwd?: string; env?: Record<string, string> } = {}
+): Promise<{ stdout: Buffer; stderr: string; code: number | null }> => {
+  const cliPath = path.resolve(__dirname, "index.ts");
+  const tsNodeRegister = require.resolve("ts-node/register");
+  const childEnv = { ...process.env, ...options.env };
+
+  if (options.cwd && options.env?.INIT_CWD === undefined) {
+    childEnv.INIT_CWD = options.cwd;
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      ["-r", tsNodeRegister, cliPath, ...args],
+      {
+        cwd: options.cwd,
+        env: childEnv,
+      }
+    );
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
+    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      resolve({
+        stdout: Buffer.concat(stdoutChunks),
+        stderr: Buffer.concat(stderrChunks).toString("utf-8"),
+        code,
+      });
+    });
+  });
+};
+
+const fileExists = async (filePath: string): Promise<boolean> =>
+  fs
+    .access(filePath)
+    .then(() => true)
+    .catch(() => false);
 
 describe("AI Digest CLI", () => {
   afterAll(async () => {
@@ -368,4 +412,328 @@ describe("AI Digest CLI", () => {
       await fs.rm(tempRootDir, { recursive: true, force: true });
     }
   }, 15000);
+
+  it("should list --stdout in the help output", async () => {
+    //harness:criterion=c-stdout-flag-registered
+    const result = await runCLIProcess(["--help"]);
+
+    expect(result.code).toBe(0);
+    expect(result.stdout.toString("utf-8")).toContain("--stdout");
+  }, 10000);
+
+  it("should write exactly digest content to stdout without creating codebase.md", async () => {
+    //harness:criterion=c-stdout-writes-to-stdout,c-stdout-no-file-created,c-stdout-no-progress-logs-on-stdout,c-stdout-digest-content-only-on-stdout,c-stdout-preserves-content-bytes,c-stdout-silent-mode-used
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-digest-stdout-test-")
+    );
+    const inputDir = path.join(tempRoot, "input");
+    const cwdDir = path.join(tempRoot, "cwd");
+
+    try {
+      await fs.mkdir(inputDir);
+      await fs.mkdir(cwdDir);
+      await fs.writeFile(path.join(inputDir, "alpha.txt"), "alpha content");
+
+      const { content } = await generateDigestContent({
+        inputDirs: [inputDir],
+        outputFilePath: null,
+        silent: true,
+      });
+      const result = await runCLIProcess(["--stdout", "--input", inputDir], {
+        cwd: cwdDir,
+      });
+      const stdoutText = result.stdout.toString("utf-8");
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(stdoutText.length).toBeGreaterThan(0);
+      expect(stdoutText).toContain("# alpha.txt");
+      expect(stdoutText).toBe(content);
+      expect(result.stdout.equals(Buffer.from(content))).toBe(true);
+      expect(stdoutText).not.toMatch(
+        /Scanning directory|Files aggregated successfully|Warning|^Ignore patterns from/m
+      );
+      await expect(fileExists(path.join(cwdDir, "codebase.md"))).resolves.toBe(
+        false
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  it("should not create an output file and should not exclude a matching input file in stdout mode", async () => {
+    //harness:criterion=c-stdout-no-output-file-created,c-stdout-output-file-not-excluded-from-processing
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-digest-stdout-output-test-")
+    );
+    const inputDir = path.join(tempRoot, "input");
+    const cwdDir = path.join(tempRoot, "cwd");
+
+    try {
+      await fs.mkdir(inputDir);
+      await fs.mkdir(cwdDir);
+      await fs.writeFile(path.join(inputDir, "source.txt"), "source content");
+
+      const noCreateResult = await runCLIProcess(
+        ["--stdout", "--output", "custom.md", "--input", inputDir],
+        { cwd: cwdDir }
+      );
+
+      expect(noCreateResult.code).toBe(0);
+      await expect(fileExists(path.join(cwdDir, "custom.md"))).resolves.toBe(
+        false
+      );
+
+      await fs.writeFile(
+        path.join(inputDir, "custom.md"),
+        "pre-existing digest target content"
+      );
+
+      const includeResult = await runCLIProcess(
+        ["--stdout", "--output", "custom.md", "--input", inputDir],
+        { cwd: inputDir }
+      );
+      const stdoutText = includeResult.stdout.toString("utf-8");
+
+      expect(includeResult.code).toBe(0);
+      expect(stdoutText).toContain("# custom.md");
+      expect(stdoutText).toContain("pre-existing digest target content");
+      await expect(fs.readFile(path.join(inputDir, "custom.md"), "utf-8"))
+        .resolves.toBe("pre-existing digest target content");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  it("should write stdout mode errors only to stderr", async () => {
+    //harness:criterion=c-stdout-errors-go-to-stderr
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-digest-stdout-error-test-")
+    );
+
+    try {
+      const result = await runCLIProcess(
+        ["--stdout", "--input", path.join(tempRoot, "missing")],
+        { cwd: tempRoot }
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stdout.toString("utf-8")).toBe("");
+      expect(result.stderr.length).toBeGreaterThan(0);
+      expect(result.stderr).toMatch(/error|ENOENT|missing|no such/i);
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 10000);
+
+  it("should reject combining --stdout and --watch before writing digest content", async () => {
+    //harness:criterion=c-stdout-watch-rejected-nonzero-exit,c-stdout-watch-rejected-stderr-message,c-stdout-watch-no-digest-on-stdout
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-digest-stdout-watch-test-")
+    );
+    const inputDir = path.join(tempRoot, "input");
+
+    try {
+      await fs.mkdir(inputDir);
+      await fs.writeFile(path.join(inputDir, "watch.txt"), "watch content");
+
+      const result = await runCLIProcess(
+        ["--stdout", "--watch", "--input", inputDir],
+        { cwd: tempRoot }
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stdout.toString("utf-8")).toBe("");
+      expect(result.stderr).toMatch(
+        /--stdout.*--watch|--watch.*--stdout|cannot be combined/i
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 10000);
+
+  it("should honor ignore and default-ignore options in stdout mode", async () => {
+    //harness:criterion=c-stdout-honors-ignore-file,c-stdout-honors-no-default-ignores
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-digest-stdout-ignore-test-")
+    );
+
+    try {
+      await fs.writeFile(path.join(tempRoot, "keep.txt"), "public content");
+      await fs.writeFile(path.join(tempRoot, "secret.txt"), "secret content");
+      await fs.writeFile(path.join(tempRoot, ".env"), "DEFAULT_IGNORED=yes");
+      await fs.writeFile(
+        path.join(tempRoot, ".customignore"),
+        "secret.txt\n.customignore\n"
+      );
+
+      const ignoredResult = await runCLIProcess(
+        ["--stdout", "--ignore-file", ".customignore", "--input", tempRoot],
+        { cwd: tempRoot }
+      );
+      const ignoredStdout = ignoredResult.stdout.toString("utf-8");
+
+      expect(ignoredResult.code).toBe(0);
+      expect(ignoredStdout).toContain("public content");
+      expect(ignoredStdout).not.toContain("Ignore patterns from");
+      expect(ignoredStdout).not.toContain("# secret.txt");
+      expect(ignoredStdout).not.toContain("secret content");
+
+      const defaultIgnoredResult = await runCLIProcess(
+        ["--stdout", "--input", tempRoot],
+        { cwd: tempRoot }
+      );
+      expect(defaultIgnoredResult.stdout.toString("utf-8")).not.toContain(
+        "DEFAULT_IGNORED=yes"
+      );
+
+      const noDefaultIgnoresResult = await runCLIProcess(
+        ["--stdout", "--no-default-ignores", "--input", tempRoot],
+        { cwd: tempRoot }
+      );
+      const noDefaultStdout = noDefaultIgnoresResult.stdout.toString("utf-8");
+
+      expect(noDefaultIgnoresResult.code).toBe(0);
+      expect(noDefaultStdout).toContain("# .env");
+      expect(noDefaultStdout).toContain("DEFAULT_IGNORED=yes");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  it("should honor minify-file and whitespace-removal options in stdout mode", async () => {
+    //harness:criterion=c-stdout-honors-minify-file,c-stdout-honors-whitespace-removal
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-digest-stdout-transform-test-")
+    );
+
+    try {
+      await fs.writeFile(
+        path.join(tempRoot, "multi.js"),
+        "function expanded() {\n    return \"full content\";\n}\n"
+      );
+      await fs.writeFile(
+        path.join(tempRoot, "spacey.js"),
+        "const value =    1;\n\nconsole.log( value );\n"
+      );
+
+      const plainResult = await runCLIProcess(
+        ["--stdout", "--minify-file", ".missingminify", "--input", tempRoot],
+        { cwd: tempRoot }
+      );
+      const plainStdout = plainResult.stdout.toString("utf-8");
+
+      await fs.writeFile(
+        path.join(tempRoot, ".customminify"),
+        "multi.js\n.customminify\n"
+      );
+
+      const minifiedResult = await runCLIProcess(
+        ["--stdout", "--minify-file", ".customminify", "--input", tempRoot],
+        { cwd: tempRoot }
+      );
+      const minifiedStdout = minifiedResult.stdout.toString("utf-8");
+
+      expect(minifiedResult.code).toBe(0);
+      expect(minifiedStdout).not.toBe(plainStdout);
+      expect(minifiedStdout).toContain("# multi.js");
+      expect(minifiedStdout).toContain("This is a minified file of type: .js");
+      expect(minifiedStdout).not.toContain('return "full content";');
+
+      const whitespaceResult = await runCLIProcess(
+        [
+          "--stdout",
+          "--whitespace-removal",
+          "--minify-file",
+          ".missingminify",
+          "--input",
+          tempRoot,
+        ],
+        { cwd: tempRoot }
+      );
+      const whitespaceStdout = whitespaceResult.stdout.toString("utf-8");
+
+      expect(plainStdout).toContain(
+        "const value =    1;\n\nconsole.log( value );"
+      );
+      expect(whitespaceResult.code).toBe(0);
+      expect(whitespaceStdout).toContain(
+        "const value = 1; console.log( value );"
+      );
+      expect(whitespaceStdout).not.toContain(
+        "const value =    1;\n\nconsole.log( value );"
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  it("should preserve normal file-output behavior when --stdout is omitted", async () => {
+    //harness:criterion=c-no-stdout-default-behavior-unchanged
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-digest-no-stdout-test-")
+    );
+    const inputDir = path.join(tempRoot, "input");
+    const cwdDir = path.join(tempRoot, "cwd");
+
+    try {
+      await fs.mkdir(inputDir);
+      await fs.mkdir(cwdDir);
+      await fs.writeFile(path.join(inputDir, "plain.txt"), "plain content");
+
+      const result = await runCLIProcess(["--input", inputDir], {
+        cwd: cwdDir,
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout.toString("utf-8")).toMatch(
+        /Files aggregated successfully/
+      );
+      await expect(fileExists(path.join(cwdDir, "codebase.md"))).resolves.toBe(
+        true
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  it("should keep watch mode usable when --stdout is omitted", async () => {
+    //harness:criterion=c-no-stdout-watch-still-works
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-digest-no-stdout-watch-test-")
+    );
+    const inputDir = path.join(tempRoot, "input");
+
+    try {
+      await fs.mkdir(inputDir);
+      await fs.writeFile(path.join(inputDir, "watch.txt"), "watch content");
+
+      const result = await runCLIProcess(["--watch", "--input", inputDir], {
+        cwd: tempRoot,
+        env: { NODE_ENV: "test" },
+      });
+
+      expect(result.code).toBe(0);
+      expect(result.stdout.toString("utf-8")).toContain("Watch mode enabled");
+      expect(result.stderr).not.toMatch(
+        /--stdout.*--watch|--watch.*--stdout|cannot be combined/i
+      );
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  it("should document --stdout in README options and examples", async () => {
+    //harness:criterion=c-readme-documents-stdout-flag,c-readme-documents-watch-incompatibility,c-readme-includes-usage-example
+    const readme = await fs.readFile(
+      path.resolve(__dirname, "..", "README.md"),
+      "utf-8"
+    );
+
+    expect(readme).toMatch(/--stdout.{0,200}stdout/si);
+    expect(readme).toMatch(
+      /--stdout.*--watch|--watch.*--stdout|cannot be combined/i
+    );
+    expect(readme).toMatch(/(?:npx\s+)?ai-digest\s+--stdout[\s|>]/);
+  });
 });
