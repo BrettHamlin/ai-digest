@@ -526,6 +526,46 @@ describe("AI Digest CLI", () => {
       }
     }, 15000);
 
+    it("should not overwrite an existing default output file in stdout mode", async () => {
+      // harness:criterion=c-stdout-no-output-file-created
+      const tempDir = await createStdoutFixture();
+      const outputPath = path.join(tempDir, "codebase.md");
+      const originalContent = "existing generated digest must stay intact\n";
+
+      try {
+        await fs.writeFile(outputPath, originalContent);
+
+        const { code } = await runCLIInDir(["--stdout"], tempDir);
+        const afterContent = await fs.readFile(outputPath, "utf-8");
+
+        expect(code).toBe(0);
+        expect(afterContent).toBe(originalContent);
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
+    it("should not create a custom output file in stdout mode", async () => {
+      // harness:criterion=c-stdout-no-output-file-created
+      const tempDir = await createStdoutFixture();
+      const customOutputPath = path.join(tempDir, "custom.md");
+
+      try {
+        expect(await pathExists(customOutputPath)).toBe(false);
+
+        const { stdout, code } = await runCLIInDir(
+          ["--stdout", "--output=custom.md"],
+          tempDir
+        );
+
+        expect(code).toBe(0);
+        expect(stdout.length).toBeGreaterThan(0);
+        expect(await pathExists(customOutputPath)).toBe(false);
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
     it("should keep progress and informational log lines off stdout", async () => {
       // harness:criterion=c-stdout-no-progress-on-stdout,c-stdout-logs-on-stderr
       const tempDir = await createStdoutFixture();
@@ -555,6 +595,7 @@ describe("AI Digest CLI", () => {
         expect(code).not.toBe(0);
         expect(stderr.trim().length).toBeGreaterThan(0);
         expect(stderr).toMatch(/error|unknown option/i);
+        expect(stdout).not.toMatch(/error|unknown option/i);
         expect(stdout.trim()).toBe("");
       } finally {
         await fs.rm(tempDir, { recursive: true, force: true });

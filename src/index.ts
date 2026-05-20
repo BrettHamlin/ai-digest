@@ -209,7 +209,8 @@ if (require.main === module) {
 
           process.stdout.write(content);
         } catch (error) {
-          console.error("Error generating digest content:", error);
+          const message = error instanceof Error ? error.message : String(error);
+          console.error(`Error generating digest content: ${message}`);
           process.exit(1);
         }
         return;
