@@ -2,13 +2,35 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import fs from "fs/promises";
+import fsSync from "fs";
 import os from "os";
 
 const execAsync = promisify(exec);
+const execAsyncBuffer = promisify(exec) as (
+  command: string,
+  options: { encoding: "buffer"; maxBuffer?: number; timeout?: number }
+) => Promise<{ stdout: Buffer; stderr: Buffer }>;
+
+const LOG_OUTPUT_PATTERN =
+  /Processing|Generating|Summary|Warning|Error|files found|tokens|Output written|Files aggregated successfully|Files included in output|Done! Wrote code base/i;
+const WATCH_STDOUT_ERROR_PATTERN =
+  /watch.*stdout|stdout.*watch|unsupported|not supported/i;
+
+const shellQuote = (value: string) =>
+  `'${value.replace(/'/g, "'\\''")}'`;
 
 const runCLI = async (args: string = "") => {
   const cliPath = path.resolve(__dirname, "index.ts");
   return execAsync(`ts-node ${cliPath} ${args}`);
+};
+
+const runCLIBuffer = async (args: string = "", timeout = 10000) => {
+  const cliPath = path.resolve(__dirname, "index.ts");
+  return execAsyncBuffer(`ts-node ${cliPath} ${args}`, {
+    encoding: "buffer",
+    maxBuffer: 1024 * 1024 * 20,
+    timeout,
+  });
 };
 
 // New helper to run CLI with specific environment variables
@@ -368,4 +390,346 @@ describe("AI Digest CLI", () => {
       await fs.rm(tempRootDir, { recursive: true, force: true });
     }
   }, 15000);
+
+  describe("stdout option", () => {
+    const rootCodebasePath = path.resolve(__dirname, "..", "codebase.md");
+
+    const createStdoutFixture = async () => {
+      const tempDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "ai-digest-stdout-test-")
+      );
+
+      await fs.writeFile(
+        path.join(tempDir, "alpha.ts"),
+        [
+          "export function alpha() {",
+          "  return 'alpha';",
+          "}",
+          "",
+        ].join("\n")
+      );
+      await fs.writeFile(
+        path.join(tempDir, "spacing.txt"),
+        "hello   \n\nworld\n"
+      );
+      await fs.mkdir(path.join(tempDir, "node_modules"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, "node_modules", "ignored.js"),
+        "default ignored content"
+      );
+      await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, ".git", "config"),
+        "default ignored git content"
+      );
+
+      return tempDir;
+    };
+
+    afterEach(async () => {
+      await fs.unlink(rootCodebasePath).catch(() => {});
+    });
+
+    it("lists --stdout in CLI help", async () => {
+      //harness:criterion=c-stdout-flag-exists
+      const { stdout } = await runCLI("--help");
+
+      expect(stdout).toContain("--stdout");
+    }, 10000);
+
+    it("writes only raw digest content to stdout without creating the default output file", async () => {
+      //harness:criterion=c-stdout-writes-to-stdout,c-stdout-no-file-created,c-stdout-no-log-strings-on-stdout,c-stdout-logs-go-to-stderr-or-suppressed,c-stdout-respects-default-ignores,c-stdout-preserves-trailing-whitespace,c-stdout-preserves-blank-lines,c-stdout-no-write-digest-to-file-called,c-stdout-no-aggregate-files-called
+      const tempDir = await createStdoutFixture();
+      await fs.unlink(rootCodebasePath).catch(() => {});
+
+      try {
+        const { stdout } = await runCLIBuffer(`--stdout ${shellQuote(tempDir)}`);
+        const stdoutText = stdout.toString("utf-8");
+
+        expect(stdout.length).toBeGreaterThan(0);
+        expect(stdoutText).toContain("# alpha.ts");
+        expect(stdoutText).toContain("export function alpha()");
+        expect(stdoutText).not.toMatch(LOG_OUTPUT_PATTERN);
+        expect(stdoutText).not.toContain("node_modules");
+        expect(stdoutText).not.toContain(".git");
+        expect(stdout.includes(Buffer.from("hello   \n"))).toBe(true);
+        expect(stdoutText).toContain("hello   \n\nworld");
+        expect(fsSync.existsSync(rootCodebasePath)).toBe(false);
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
+    it("does not overwrite an existing default output file in stdout mode", async () => {
+      //harness:criterion=c-stdout-no-file-created,c-stdout-no-write-digest-to-file-called,c-stdout-no-aggregate-files-called
+      const tempDir = await createStdoutFixture();
+      const existingContent = "existing digest should remain untouched\n";
+
+      try {
+        await fs.writeFile(rootCodebasePath, existingContent);
+
+        const { stdout } = await runCLI(`--stdout ${shellQuote(tempDir)}`);
+        const afterContent = await fs.readFile(rootCodebasePath, "utf-8");
+
+        expect(stdout).toContain("# alpha.ts");
+        expect(afterContent).toBe(existingContent);
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+        await fs.unlink(rootCodebasePath).catch(() => {});
+      }
+    }, 15000);
+
+    it("matches normal file output byte-for-byte", async () => {
+      //harness:criterion=c-stdout-content-matches-file-content
+      const tempDir = await createStdoutFixture();
+      const outputFile = path.join(
+        os.tmpdir(),
+        `ai-digest-file-output-${Date.now()}.md`
+      );
+
+      try {
+        await fs.unlink(outputFile).catch(() => {});
+        await runCLI(`-o ${shellQuote(outputFile)} ${shellQuote(tempDir)}`);
+        const fileBuffer = await fs.readFile(outputFile);
+        const { stdout } = await runCLIBuffer(`--stdout ${shellQuote(tempDir)}`);
+
+        expect(Buffer.compare(stdout, fileBuffer)).toBe(0);
+      } finally {
+        await fs.unlink(outputFile).catch(() => {});
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
+    it("uses the positional custom input directory in stdout mode", async () => {
+      //harness:criterion=c-stdout-with-custom-input-dir
+      const tempDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "ai-digest-stdout-custom-dir-")
+      );
+
+      try {
+        await fs.writeFile(path.join(tempDir, "hello.txt"), "hello from temp");
+        const { stdout } = await runCLI(`${shellQuote(tempDir)} --stdout`);
+
+        expect(stdout).toContain("# hello.txt");
+        expect(stdout).toContain("hello from temp");
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
+    it("respects custom ignore files in stdout mode", async () => {
+      //harness:criterion=c-stdout-respects-custom-ignore
+      const tempDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "ai-digest-stdout-ignore-")
+      );
+
+      try {
+        await fs.writeFile(path.join(tempDir, "included.ts"), "included");
+        await fs.writeFile(path.join(tempDir, "excluded.ts"), "excluded");
+        await fs.writeFile(path.join(tempDir, ".myignore"), "excluded.ts\n");
+
+        const { stdout } = await runCLI(
+          `${shellQuote(tempDir)} --stdout --ignore-file=.myignore`
+        );
+
+        expect(stdout).toContain("# included.ts");
+        expect(stdout).toContain("included");
+        expect(stdout).not.toContain("excluded.ts");
+        expect(stdout).not.toContain("excluded");
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
+    it("respects minify patterns in stdout mode", async () => {
+      //harness:criterion=c-stdout-respects-minify
+      const tempDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "ai-digest-stdout-minify-")
+      );
+
+      try {
+        const largeContent = "const largeValue = 'content';\n".repeat(100);
+        await fs.writeFile(
+          path.join(tempDir, "regular.ts"),
+          "export const ok = true;\n"
+        );
+        await fs.writeFile(path.join(tempDir, "large.ts"), largeContent);
+        await fs.writeFile(path.join(tempDir, ".aidigestminify"), "large.ts\n");
+
+        const withMinify = await runCLIBuffer(`--stdout ${shellQuote(tempDir)}`);
+        await fs.unlink(path.join(tempDir, ".aidigestminify"));
+        const withoutMinify = await runCLIBuffer(
+          `--stdout ${shellQuote(tempDir)}`
+        );
+        const minifiedText = withMinify.stdout.toString("utf-8");
+
+        expect(withMinify.stdout.length).toBeLessThan(
+          withoutMinify.stdout.length
+        );
+        expect(minifiedText).toContain("# large.ts");
+        expect(minifiedText).toContain("This is a minified file of type: .ts");
+        expect(minifiedText).not.toContain(largeContent.trim());
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
+    it("respects whitespace removal in stdout mode", async () => {
+      //harness:criterion=c-stdout-respects-whitespace-removal
+      const tempDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "ai-digest-stdout-whitespace-")
+      );
+
+      try {
+        await fs.writeFile(
+          path.join(tempDir, "messy.ts"),
+          "const   value   =   1;\n\n\nfunction   messy()   {   return   value;   }\n"
+        );
+
+        const normal = await runCLIBuffer(`--stdout ${shellQuote(tempDir)}`);
+        const compact = await runCLIBuffer(
+          `--stdout --whitespace-removal ${shellQuote(tempDir)}`
+        );
+        const compactText = compact.stdout.toString("utf-8");
+
+        expect(compact.stdout.length).toBeLessThanOrEqual(normal.stdout.length);
+        expect(compactText).not.toContain("const   value");
+        expect(compactText).toContain("const value = 1;");
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
+    it("rejects watch mode with stdout and keeps the unsupported-combination message off stdout", async () => {
+      //harness:criterion=c-stdout-watch-rejected,c-stdout-watch-error-not-on-stdout
+      const tempDir = await createStdoutFixture();
+
+      try {
+        let stdoutText = "";
+        let stderrText = "";
+        let exitCode = 0;
+        let timedOut = false;
+
+        try {
+          const result = await runCLIBuffer(
+            `--stdout --watch ${shellQuote(tempDir)}`,
+            3000
+          );
+          stdoutText = result.stdout.toString("utf-8");
+          stderrText = result.stderr.toString("utf-8");
+        } catch (error) {
+          const execError = error as {
+            stdout?: Buffer;
+            stderr?: Buffer;
+            code?: number;
+            killed?: boolean;
+          };
+          stdoutText = execError.stdout?.toString("utf-8") ?? "";
+          stderrText = execError.stderr?.toString("utf-8") ?? "";
+          exitCode = typeof execError.code === "number" ? execError.code : 0;
+          timedOut = execError.killed ?? false;
+        }
+
+        expect(timedOut).toBe(false);
+        expect(
+          exitCode !== 0 || WATCH_STDOUT_ERROR_PATTERN.test(stderrText)
+        ).toBe(true);
+        expect(stdoutText).not.toMatch(WATCH_STDOUT_ERROR_PATTERN);
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 10000);
+
+    it("ignores custom output files and show-output-files on stdout", async () => {
+      //harness:criterion=c-stdout-custom-output-flag-ignored-or-warned,c-stdout-show-output-files-not-on-stdout
+      const tempDir = await createStdoutFixture();
+      const customOutputFile = path.join(
+        os.tmpdir(),
+        `ai-digest-stdout-custom-${Date.now()}.md`
+      );
+
+      try {
+        await fs.unlink(customOutputFile).catch(() => {});
+        const { stdout, stderr } = await runCLI(
+          `--stdout --show-output-files -o ${shellQuote(customOutputFile)} ${shellQuote(tempDir)}`
+        );
+
+        expect(stdout).toContain("# alpha.ts");
+        expect(stdout).not.toMatch(
+          /Output files:|output files written|Files included in the output/i
+        );
+        expect(fsSync.existsSync(customOutputFile)).toBe(false);
+        expect(stderr).toEqual(expect.any(String));
+      } finally {
+        await fs.unlink(customOutputFile).catch(() => {});
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
+    it("still writes codebase.md and emits logs when stdout is omitted", async () => {
+      //harness:criterion=c-no-stdout-default-file-still-created,c-no-stdout-logs-still-visible
+      const tempDir = await createStdoutFixture();
+      await fs.unlink(rootCodebasePath).catch(() => {});
+
+      try {
+        const { stdout, stderr } = await runCLI(`${shellQuote(tempDir)}`);
+        const combinedOutput = `${stdout}${stderr}`;
+
+        expect(fsSync.existsSync(rootCodebasePath)).toBe(true);
+        expect(fsSync.statSync(rootCodebasePath).size).toBeGreaterThan(0);
+        expect(combinedOutput).toMatch(
+          /Output written|files found|tokens|Files aggregated successfully/i
+        );
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+        await fs.unlink(rootCodebasePath).catch(() => {});
+      }
+    }, 15000);
+
+    it("remains composable in shell pipelines", async () => {
+      //harness:criterion=c-stdout-pipeline-composable
+      const tempDir = await createStdoutFixture();
+
+      try {
+        const cliPath = path.resolve(__dirname, "index.ts");
+        const { stdout } = await execAsync(
+          `ts-node ${cliPath} --stdout ${shellQuote(tempDir)} | grep 'function'`
+        );
+        const lines = stdout.trim().split("\n").filter(Boolean);
+
+        expect(lines.length).toBeGreaterThan(0);
+        for (const line of lines) {
+          expect(line).toMatch(/function/);
+          expect(line).not.toMatch(LOG_OUTPUT_PATTERN);
+        }
+      } finally {
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    }, 15000);
+
+    it("documents and versions the stdout option", async () => {
+      //harness:criterion=c-package-version-bumped,c-readme-documents-stdout,c-claude-md-updated
+      const packageJson = JSON.parse(
+        await fs.readFile(path.resolve(__dirname, "..", "package.json"), "utf-8")
+      );
+      const readme = await fs.readFile(
+        path.resolve(__dirname, "..", "README.md"),
+        "utf-8"
+      );
+      const claudeMd = await fs.readFile(
+        path.resolve(__dirname, "..", "CLAUDE.md"),
+        "utf-8"
+      );
+
+      expect(packageJson.version).toBe("1.6.0");
+      expect(readme).toContain("--stdout");
+      expect(readme.match(/--stdout/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+      expect(
+        readme
+          .split("\n")
+          .some((line) => line.includes("--stdout") && line.includes("|"))
+      ).toBe(true);
+      expect(claudeMd).toContain("--stdout");
+    }, 10000);
+  });
 });

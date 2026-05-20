@@ -14,6 +14,18 @@ import {
 } from "./digest";
 import { MinifyFileDescriptionCallback, ProcessedFile } from "./types";
 
+type CliOptions = {
+  input: string[];
+  output: string;
+  stdout: boolean;
+  defaultIgnores: boolean;
+  whitespaceRemoval: boolean;
+  showOutputFiles: string | boolean;
+  ignoreFile: string;
+  minifyFile: string;
+  watch: boolean;
+};
+
 // Main library function
 export async function generateDigest(
   options: {
@@ -143,12 +155,14 @@ if (require.main === module) {
   program
     .version(packageJson.version)
     .description("Aggregate files into a single Markdown file")
+    .argument("[directories...]", "Input directories")
     .option(
       "-i, --input <directories...>",
       "Input directories (multiple allowed)",
       [getActualWorkingDirectory()],
     )
     .option("-o, --output <file>", "Output file name", "codebase.md")
+    .option("--stdout", "Write digest content to stdout instead of a file")
     .option("--no-default-ignores", "Disable default ignore patterns")
     .option("--whitespace-removal", "Enable whitespace removal")
     .option(
@@ -166,11 +180,23 @@ if (require.main === module) {
       ".aidigestminify",
     )
     .option("--watch", "Watch for file changes and rebuild automatically")
-    .action(async (options) => {
-      const inputDirs = options.input.map((dir: string) => path.resolve(dir));
+    .action(async (directories: string[], options: CliOptions) => {
+      const explicitInputDirs =
+        program.getOptionValueSource("input") === "cli" ? options.input : [];
+      const selectedInputDirs = [...explicitInputDirs, ...directories];
+      const inputDirs = (
+        selectedInputDirs.length > 0
+          ? selectedInputDirs
+          : [getActualWorkingDirectory()]
+      ).map((dir: string) => path.resolve(dir));
       const outputFile = path.isAbsolute(options.output)
         ? options.output
         : path.join(getActualWorkingDirectory(), options.output);
+
+      if (options.stdout && options.watch) {
+        console.error("Error: --stdout cannot be used with --watch.");
+        process.exit(1);
+      }
 
       if (options.watch) {
         // Run in watch mode
@@ -184,6 +210,23 @@ if (require.main === module) {
           options.minifyFile,
           process.env.NODE_ENV === "test", // Pass test mode flag based on environment
         );
+      } else if (options.stdout) {
+        try {
+          const { content } = await generateDigestContent({
+            inputDirs,
+            outputFilePath: outputFile,
+            useDefaultIgnores: options.defaultIgnores,
+            removeWhitespaceFlag: options.whitespaceRemoval,
+            ignoreFile: options.ignoreFile,
+            minifyFile: options.minifyFile,
+            silent: true,
+          });
+
+          process.stdout.write(content);
+        } catch (error) {
+          console.error("Error generating digest content:", error);
+          process.exit(1);
+        }
       } else {
         // Run once
         await aggregateFiles(

@@ -41,6 +41,7 @@ For best results, re-upload the Markdown file before starting a new chat session
 
 - `-i, --input <directories...>`: Specify input directories (multiple allowed, default: current directory)
 - `-o, --output <file>`: Specify output file (default: codebase.md)
+- `--stdout`: Write raw digest content to stdout instead of creating or overwriting an output file
 - `--no-default-ignores`: Disable default ignore patterns
 - `--whitespace-removal`: Enable whitespace removal
 - `--show-output-files [sort]`: Display a list of files with size statistics and bar charts. Add `sort` to sort by file size.
@@ -71,31 +72,37 @@ For best results, re-upload the Markdown file before starting a new chat session
    npx ai-digest --whitespace-removal
    ```
 
-4. Show files included with size statistics:
+4. Pipe digest content to another command:
+
+   ```bash
+   npx ai-digest --stdout | grep "function"
+   ```
+
+5. Show files included with size statistics:
 
    ```bash
    npx ai-digest --show-output-files
    ```
 
-5. Show files sorted by size (largest first):
+6. Show files sorted by size (largest first):
 
    ```bash
    npx ai-digest --show-output-files sort
    ```
 
-6. Watch mode:
+7. Watch mode:
 
    ```bash
    npx ai-digest --watch
    ```
 
-7. Use custom minify file:
+8. Use custom minify file:
 
    ```bash
    npx ai-digest --minify-file .myminifypatterns
    ```
 
-8. Combine multiple options:
+9. Combine multiple options:
 
    ```bash
    npx ai-digest -i /path/to/your/project -o project_summary.md --whitespace-removal --show-output-files sort --watch
