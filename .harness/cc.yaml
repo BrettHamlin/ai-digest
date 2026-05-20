@@ -1,0 +1,78 @@
+version: "1"
+
+# gridfire_template_version: stage3-ts-cli/v1
+
+github:
+  owner: BrettHamlin
+  repo: ai-digest
+
+reviewer_dispatch:
+  strategy: progressive
+  clustering:
+    mode: lsp_preferred
+    regex_fallback: true
+
+reviewers:
+  - name: cli-command-contracts
+    file: .harness/agents/cli-command-contracts.md
+    description: Checks TypeScript CLI command contracts, flags, arguments, exit codes, and stdout/stderr behavior.
+    path_hints: ["src/**", "bin/**", "cli/**", "commands/**", "**/*.ts", "package.json"]
+    language_hints: [typescript, javascript, shell]
+    mandatory_triggers: ["command", "flag", "argument", "stdout", "stderr", "exit code", "help", "script"]
+    passing_grade: C
+    max_retries: 5
+
+  - name: file-processing-safety
+    file: .harness/agents/file-processing-safety.md
+    description: Checks file-selection, ignore-pattern, output-file, stdout/stderr, and accidental-write safety for TypeScript CLIs.
+    path_hints: ["src/**", "test/**", "tests/**", "package.json", "**/*.ts", "**/*.js", "**/*ignore*", "**/*minify*"]
+    language_hints: [typescript, javascript, json, yaml]
+    mandatory_triggers: ["input", "output", "stdout", "stderr", "ignore", "glob", "watch", "write", "file", "directory"]
+    passing_grade: C
+    max_retries: 5
+
+codegen:
+  cli_provider: codex-cli
+  default_model: gpt-5.5
+
+stages:
+  planner:
+    explore_model: gpt-5.5
+  code_gen_feature:
+    model: gpt-5.5
+    timeout_s: 21600
+  code_gen_test:
+    model: gpt-5.5
+  code_gen_e2e_test:
+    model: gpt-5.5
+    timeout_s: 21600
+
+ci:
+  provider: github-actions
+  build:
+    workflow: ".github/workflows/gridfire-build.yml"
+    timeout_sec: 1800
+  test:
+    workflow: ".github/workflows/gridfire-test.yml"
+    timeout_sec: 1800
+  failure_extraction:
+    - source: annotations
+    - source: junit-xml
+      path: "test-results/*.xml"
+    - source: ai-extract
+
+gates:
+  plan:
+    auto_approve: true
+  ac:
+    auto_approve: true
+  merge_review:
+    auto_approve: true
+
+inner_loop:
+  reviewer_per_max: 2
+  reviewer_total_max: 5
+  build_max: 3
+  test_max: 3
+  build_test_total_max: 5
+  budget_reset_on_user_changes: true
