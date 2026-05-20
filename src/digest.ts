@@ -30,6 +30,29 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
 // Track if a file write is in progress
 let isWritingFile = false;
 
+async function pathsReferToSameFile(
+  firstPath: string,
+  secondPath: string
+): Promise<boolean> {
+  const resolvedFirstPath = path.resolve(firstPath);
+  const resolvedSecondPath = path.resolve(secondPath);
+
+  if (resolvedFirstPath === resolvedSecondPath) {
+    return true;
+  }
+
+  try {
+    const [realFirstPath, realSecondPath] = await Promise.all([
+      fs.realpath(resolvedFirstPath),
+      fs.realpath(resolvedSecondPath),
+    ]);
+
+    return realFirstPath === realSecondPath;
+  } catch {
+    return false;
+  }
+}
+
 export async function readIgnoreFile(
   inputDir: string,
   filename: string,
@@ -247,6 +270,11 @@ export async function processFiles(options: {
     const includedFiles: string[] = [];
     const fileSizes: Record<string, number> = {};
     const processedFiles: ProcessedFile[] = [];
+    const outputAbsPath = outputFilePath
+      ? path.isAbsolute(outputFilePath)
+        ? outputFilePath
+        : path.join(getActualWorkingDirectory(), outputFilePath)
+      : null;
 
     // Sort the files in natural path order
     allFileEntries.sort((a, b) => naturalSort(a.relativePath, b.relativePath));
@@ -260,15 +288,12 @@ export async function processFiles(options: {
         directories.length > 1
           ? `${path.basename(sourceDir)}/${relativePath}`
           : relativePath;
-
-      const outputAbsPath = outputFilePath
-        ? path.isAbsolute(outputFilePath)
-          ? outputFilePath
-          : path.join(getActualWorkingDirectory(), outputFilePath)
-        : null;
+      const isOutputFile = outputAbsPath
+        ? await pathsReferToSameFile(fullPath, outputAbsPath)
+        : false;
 
       if (
-        (outputAbsPath && fullPath === outputAbsPath) ||
+        isOutputFile ||
         (useDefaultIgnores && defaultIgnore.ignores(relativePath))
       ) {
         defaultIgnoredCount++;

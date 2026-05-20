@@ -27,6 +27,16 @@ type CliOptions = {
   watch?: boolean;
 };
 
+function validateInputDirs(inputDirs: string[]): void {
+  for (const inputDir of inputDirs) {
+    if (!fsSync.existsSync(inputDir)) {
+      throw new Error(`Input path not found: ${inputDir}`);
+    }
+
+    fsSync.accessSync(inputDir, fsSync.constants.R_OK);
+  }
+}
+
 // Main library function
 export async function generateDigest(
   options: {
@@ -208,6 +218,8 @@ if (require.main === module) {
 
       if (options.stdout) {
         try {
+          validateInputDirs(inputDirs);
+
           const { content } = await generateDigestContent({
             inputDirs,
             outputFilePath: outputFile,

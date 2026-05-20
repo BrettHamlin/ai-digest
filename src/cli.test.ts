@@ -543,19 +543,39 @@ describe("AI Digest CLI", () => {
     try {
       await fs.writeFile(path.join(tempDir, "source.txt"), "source content");
       await fs.writeFile(
+        path.join(tempDir, "codebase.md"),
+        "default output content should not be digested"
+      );
+      await fs.writeFile(
         path.join(tempDir, "custom-output.md"),
         "output content should not be digested"
       );
 
-      const { stdout } = await runCLIInCwd(
+      const defaultOutputRun = await runCLIInCwd("--stdout .", tempDir);
+      expect(defaultOutputRun.stdout).toContain("# source.txt");
+      expect(defaultOutputRun.stdout).toContain("source content");
+      expect(defaultOutputRun.stdout).not.toContain("# codebase.md");
+      expect(defaultOutputRun.stdout).not.toContain(
+        "default output content should not be digested"
+      );
+
+      const customOutputRun = await runCLIInCwd(
         "--stdout --output custom-output.md .",
         tempDir
       );
 
-      expect(stdout).toContain("# source.txt");
-      expect(stdout).toContain("source content");
-      expect(stdout).not.toContain("# custom-output.md");
-      expect(stdout).not.toContain("output content should not be digested");
+      expect(customOutputRun.stdout).toContain("# source.txt");
+      expect(customOutputRun.stdout).toContain("source content");
+      expect(customOutputRun.stdout).not.toContain("# custom-output.md");
+      expect(customOutputRun.stdout).not.toContain(
+        "output content should not be digested"
+      );
+      await expect(
+        fs.readFile(path.join(tempDir, "codebase.md"), "utf-8")
+      ).resolves.toBe("default output content should not be digested");
+      await expect(
+        fs.readFile(path.join(tempDir, "custom-output.md"), "utf-8")
+      ).resolves.toBe("output content should not be digested");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -676,11 +696,24 @@ describe("AI Digest CLI", () => {
         "utf-8"
       )
     ) as { version: string };
-    const changelog = await fs.readFile(
-      path.resolve(__dirname, "..", "CHANGELOG.md"),
-      "utf-8"
+    let previousVersionText: string;
+    try {
+      const { stdout: previousTag } = await execAsync(
+        "git describe --tags --abbrev=0",
+        { cwd: path.resolve(__dirname, "..") }
+      );
+      previousVersionText = previousTag.trim();
+    } catch {
+      const changelog = await fs.readFile(
+        path.resolve(__dirname, "..", "CHANGELOG.md"),
+        "utf-8"
+      );
+      previousVersionText =
+        changelog.match(/###\s+v?(\d+\.\d+\.\d+)/)?.[1] ?? "";
+    }
+    const previousVersionMatch = previousVersionText.match(
+      /^v?(\d+)\.(\d+)\.(\d+)$/
     );
-    const previousVersionMatch = changelog.match(/###\s+(\d+)\.(\d+)\.(\d+)/);
     expect(previousVersionMatch).not.toBeNull();
 
     const [, prevMajor, prevMinor] = previousVersionMatch as RegExpMatchArray;
