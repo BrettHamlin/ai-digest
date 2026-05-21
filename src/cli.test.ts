@@ -468,6 +468,28 @@ describe("AI Digest CLI", () => {
     }
   }, 15000);
 
+  // harness:criterion=c-stdout-no-file-created
+  it("does not overwrite an existing default output file in stdout mode", async () => {
+    const existingOutput = "existing digest content\n";
+    const tempDir = await createTempFixture({
+      "sample.ts": "export const replacement = true;\n",
+      "codebase.md": existingOutput,
+    });
+
+    try {
+      const result = await runCLIProcess(["--stdout"], tempDir);
+      const codebasePath = path.join(tempDir, "codebase.md");
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      await expect(fs.readFile(codebasePath, "utf-8")).resolves.toBe(
+        existingOutput,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
   // harness:criterion=c-stdout-watch-rejected,c-stdout-watch-error-on-stderr
   it("rejects stdout mode combined with watch mode on stderr only", async () => {
     const tempDir = await createTempFixture({

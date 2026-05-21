@@ -167,7 +167,7 @@ if (require.main === module) {
     )
     .option(
       "--stdout",
-      "Write digest content to stdout without creating an output file"
+      "Write raw digest content to stdout without creating or overwriting an output file",
     )
     .option("--watch", "Watch for file changes and rebuild automatically")
     .action(async (options) => {
