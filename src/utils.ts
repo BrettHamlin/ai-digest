@@ -137,7 +137,7 @@ export function createIgnoreFilter(
   return ig;
 }
 
-export function estimateTokenCount(text: string): {
+export function estimateTokenCount(text: string, silent: boolean = false): {
   gptTokens: number;
   claudeTokens: number;
 } {
@@ -150,7 +150,9 @@ export function estimateTokenCount(text: string): {
       claudeTokens 
     };
   } catch (error) {
-    console.error("Error estimating token count:", error);
+    if (!silent) {
+      console.error("Error estimating token count:", error);
+    }
     return { gptTokens: 0, claudeTokens: 0 };
   }
 }

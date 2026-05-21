@@ -46,6 +46,7 @@ For best results, re-upload the Markdown file before starting a new chat session
 - `--show-output-files [sort]`: Display a list of files with size statistics and bar charts. Add `sort` to sort by file size.
 - `--ignore-file <file>`: Specify a custom ignore file (default: .aidigestignore)
 - `--minify-file <file>`: Specify a custom minify file (default: .aidigestminify)
+- `--stdout`: Write digest content directly to stdout instead of creating an output file. Cannot be combined with `--watch`.
 - `--watch`: Enable watch mode to automatically rebuild when files change
 - `--help`: Show help
 
@@ -95,7 +96,13 @@ For best results, re-upload the Markdown file before starting a new chat session
    npx ai-digest --minify-file .myminifypatterns
    ```
 
-8. Combine multiple options:
+8. Write digest content to stdout:
+
+   ```bash
+   npx ai-digest --stdout | pbcopy
+   ```
+
+9. Combine multiple options:
 
    ```bash
    npx ai-digest -i /path/to/your/project -o project_summary.md --whitespace-removal --show-output-files sort --watch

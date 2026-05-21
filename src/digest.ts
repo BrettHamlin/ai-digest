@@ -30,6 +30,43 @@ const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB in bytes
 // Track if a file write is in progress
 let isWritingFile = false;
 
+function matchesIgnorePattern(
+  filter: IgnoreInstance,
+  relativePath: string
+): boolean {
+  if (filter.ignores(relativePath)) {
+    return true;
+  }
+
+  try {
+    return filter.ignores(`/${relativePath}`);
+  } catch {
+    return false;
+  }
+}
+
+function matchesExactPathPattern(
+  patterns: string[],
+  relativePath: string
+): boolean {
+  const normalizedPath = relativePath.replace(/\\/g, "/");
+
+  return patterns.some((pattern) => {
+    const normalizedPattern = pattern
+      .trim()
+      .replace(/\\/g, "/")
+      .replace(/^\.\//, "")
+      .replace(/^\//, "");
+
+    return (
+      normalizedPattern !== "" &&
+      !normalizedPattern.includes("*") &&
+      (normalizedPath === normalizedPattern ||
+        normalizedPath.endsWith(`/${normalizedPattern}`))
+    );
+  });
+}
+
 export async function readIgnoreFile(
   inputDir: string,
   filename: string,
@@ -140,6 +177,11 @@ export async function processFiles(options: {
     const allMinifyPatterns: Record<string, string[]> = {};
 
     for (const dir of directories) {
+      const stats = await fs.stat(dir);
+      if (!stats.isDirectory()) {
+        throw new Error(`Input path is not a directory: ${dir}`);
+      }
+
       allIgnorePatterns[dir] = await readIgnoreFile(dir, ignoreFile, silent);
       allMinifyPatterns[dir] = await readIgnoreFile(dir, minifyFile, silent);
     }
@@ -272,7 +314,7 @@ export async function processFiles(options: {
         (useDefaultIgnores && defaultIgnore.ignores(relativePath))
       ) {
         defaultIgnoredCount++;
-      } else if (customIgnores[sourceDir].ignores(relativePath)) {
+      } else if (matchesIgnorePattern(customIgnores[sourceDir], relativePath)) {
         customIgnoredCount++;
       } else {
         // Get file size for stats
@@ -282,7 +324,9 @@ export async function processFiles(options: {
         let fileContent = "";
 
         // Check if file should be minified
-        const shouldMinify = customMinifies[sourceDir].ignores(relativePath);
+        const shouldMinify =
+          matchesIgnorePattern(customMinifies[sourceDir], relativePath) ||
+          matchesExactPathPattern(allMinifyPatterns[sourceDir], relativePath);
 
         if (shouldMinify) {
           // Treat as minified - similar to binary but with different message
@@ -321,9 +365,11 @@ This is a minified file of type: ${extension ? "." + extension.toLowerCase() : "
 
           // Skip files larger than 500MB to avoid string length issues
           if (stats.size > 500 * 1024 * 1024) {
-            console.warn(
-              `⚠️  Skipping large file: ${displayPath} (${fileSizeMB.toFixed(2)} MB)`
-            );
+            if (!silent) {
+              console.warn(
+                `⚠️  Skipping large file: ${displayPath} (${fileSizeMB.toFixed(2)} MB)`
+              );
+            }
             fileContent = `# ${displayPath}\n\nThis file was skipped because it is too large (${fileSizeMB.toFixed(2)} MB) to process safely.\n\n`;
             skippedFiles++;
             continue;
@@ -333,7 +379,9 @@ This is a minified file of type: ${extension ? "." + extension.toLowerCase() : "
           try {
             content = await fs.readFile(fullPath, "utf-8");
           } catch (error) {
-            console.error(`❌ Error reading file ${displayPath}:`, error);
+            if (!silent) {
+              console.error(`❌ Error reading file ${displayPath}:`, error);
+            }
             const errorMessage =
               error instanceof Error ? error.message : String(error);
             fileContent = `# ${displayPath}\n\nError reading this file: ${errorMessage}\n\n`;
@@ -450,7 +498,7 @@ export async function generateDigestContent(options: {
     let estimatedTokens = 0;
 
     if (fileSizeInBytes <= MAX_FILE_SIZE) {
-      const tokenCounts = estimateTokenCount(output);
+      const tokenCounts = estimateTokenCount(output, options.silent);
       // Use GPT tokens as the default for backward compatibility
       if (typeof tokenCounts === "object" && tokenCounts.gptTokens) {
         estimatedTokens = tokenCounts.gptTokens;
