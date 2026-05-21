@@ -46,6 +46,7 @@ For best results, re-upload the Markdown file before starting a new chat session
 - `--show-output-files [sort]`: Display a list of files with size statistics and bar charts. Add `sort` to sort by file size.
 - `--ignore-file <file>`: Specify a custom ignore file (default: .aidigestignore)
 - `--minify-file <file>`: Specify a custom minify file (default: .aidigestminify)
+- `--stdout`: Write the digest content to stdout instead of creating an output file
 - `--watch`: Enable watch mode to automatically rebuild when files change
 - `--help`: Show help
 
@@ -95,7 +96,14 @@ For best results, re-upload the Markdown file before starting a new chat session
    npx ai-digest --minify-file .myminifypatterns
    ```
 
-8. Combine multiple options:
+8. Write digest content to stdout for piping or redirection:
+
+   ```bash
+   npx ai-digest --stdout | pbcopy
+   npx ai-digest --stdout > project_summary.md
+   ```
+
+9. Combine multiple options:
 
    ```bash
    npx ai-digest -i /path/to/your/project -o project_summary.md --whitespace-removal --show-output-files sort --watch
@@ -389,6 +397,8 @@ Binary files and SVGs are included in the output with a note about their file ty
 ## Watch Mode
 
 When using the `--watch` flag, ai-digest will continuously monitor your files for changes and automatically regenerate the output file whenever a relevant file is modified, added, or deleted. This is especially useful during development when you're making frequent changes to your codebase.
+
+The `--stdout` option is incompatible with `--watch`; using both flags together returns an error.
 
 The watch mode:
 
