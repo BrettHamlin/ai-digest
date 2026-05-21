@@ -1,4 +1,4 @@
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import fs from "fs/promises";
@@ -6,8 +6,81 @@ import os from "os";
 
 const execAsync = promisify(exec);
 
+type CLIProcessResult = {
+  code: number;
+  stdout: string;
+  stdoutBuffer: Buffer;
+  stderr: string;
+};
+
+const cliPath = path.resolve(__dirname, "index.ts");
+const tsNodePath = path.resolve(
+  __dirname,
+  "..",
+  "node_modules",
+  ".bin",
+  process.platform === "win32" ? "ts-node.cmd" : "ts-node",
+);
+
+const shellQuote = (value: string) => `'${value.replace(/'/g, "'\\''")}'`;
+
+const runCLIProcess = async (
+  args: string[] = [],
+  cwd: string = process.cwd(),
+): Promise<CLIProcessResult> =>
+  new Promise((resolve, reject) => {
+    const child = spawn(tsNodePath, [cliPath, ...args], {
+      cwd,
+      env: { ...process.env, INIT_CWD: cwd },
+    });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+
+    child.stdout.on("data", (chunk) => stdoutChunks.push(Buffer.from(chunk)));
+    child.stderr.on("data", (chunk) => stderrChunks.push(Buffer.from(chunk)));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      const stdoutBuffer = Buffer.concat(stdoutChunks);
+      const stderrBuffer = Buffer.concat(stderrChunks);
+      resolve({
+        code: code ?? -1,
+        stdout: stdoutBuffer.toString("utf-8"),
+        stdoutBuffer,
+        stderr: stderrBuffer.toString("utf-8"),
+      });
+    });
+  });
+
+const createTempFixture = async (
+  files: Record<string, string>,
+): Promise<string> => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "ai-digest-stdout-"));
+
+  for (const [relativePath, content] of Object.entries(files)) {
+    const filePath = path.join(tempDir, relativePath);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, content);
+  }
+
+  return tempDir;
+};
+
+const pathExists = async (filePath: string): Promise<boolean> =>
+  fs
+    .access(filePath)
+    .then(() => true)
+    .catch(() => false);
+
+const execInFixture = (
+  command: string,
+  cwd: string,
+): ReturnType<typeof execAsync> =>
+  execAsync(command, {
+    cwd,
+    env: { ...process.env, INIT_CWD: cwd },
+  });
+
 const runCLI = async (args: string = "") => {
-  const cliPath = path.resolve(__dirname, "index.ts");
   return execAsync(`ts-node ${cliPath} ${args}`);
 };
 
@@ -368,4 +441,273 @@ describe("AI Digest CLI", () => {
       await fs.rm(tempRootDir, { recursive: true, force: true });
     }
   }, 15000);
+
+  // harness:criterion=c-stdout-flag-exists,c-stdout-writes-to-stdout,c-stdout-no-file-created,c-stdout-stderr-clean-on-success,c-stdout-no-progress-on-stdout
+  it("writes only digest markdown to stdout without creating an output file", async () => {
+    const tempDir = await createTempFixture({
+      "sample.ts": "export const sample = 42;\n",
+    });
+
+    try {
+      const result = await runCLIProcess(["--stdout"], tempDir);
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdoutBuffer.length).toBeGreaterThan(0);
+      expect(result.stdout).toMatch(/^#/m);
+      expect(result.stdout).toContain("# sample.ts");
+      expect(result.stdout).toContain("export const sample = 42;");
+      expect(result.stdout).not.toMatch(
+        /Processing|Generating|Written to|files processed|Summary|Files aggregated successfully|codebase\.md/i,
+      );
+      await expect(pathExists(path.join(tempDir, "codebase.md"))).resolves.toBe(
+        false,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  // harness:criterion=c-stdout-watch-rejected,c-stdout-watch-error-on-stderr
+  it("rejects stdout mode combined with watch mode on stderr only", async () => {
+    const tempDir = await createTempFixture({
+      "sample.ts": "export const sample = 42;\n",
+    });
+
+    try {
+      const result = await runCLIProcess(["--stdout", "--watch"], tempDir);
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr.length).toBeGreaterThan(0);
+      expect(result.stderr).toMatch(/cannot|incompatible|watch/i);
+      expect(result.stdout.trim()).toBe("");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  // harness:criterion=c-stdout-errors-to-stderr,c-stdout-errors-not-on-stdout
+  it("reports stdout mode generation errors on stderr only", async () => {
+    const tempDir = await createTempFixture({
+      "sample.ts": "export const sample = 42;\n",
+    });
+    const missingDir = path.join(tempDir, "missing");
+
+    try {
+      const result = await runCLIProcess(
+        ["--stdout", "--input", missingDir],
+        tempDir,
+      );
+
+      expect(result.code).not.toBe(0);
+      expect(result.stderr.length).toBeGreaterThan(0);
+      expect(result.stderr).toMatch(/error|missing|no such file|ENOENT/i);
+      expect(result.stdout.trim()).toBe("");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  // harness:criterion=c-stdout-ignore-patterns-respected
+  it("respects ignore patterns when writing digest content to stdout", async () => {
+    const tempDir = await createTempFixture({
+      "include-me.ts": "export const includedMarker = true;\n",
+      "exclude-me.ts": "export const excludedMarker = true;\n",
+      ".aidigestignore": "exclude-me.ts\n",
+    });
+
+    try {
+      const result = await runCLIProcess(["--stdout"], tempDir);
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("# include-me.ts");
+      expect(result.stdout).toContain("includedMarker");
+      expect(result.stdout).not.toContain("exclude-me.ts");
+      expect(result.stdout).not.toContain("excludedMarker");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  // harness:criterion=c-stdout-minify-file-respected
+  it("respects minify-file patterns when writing digest content to stdout", async () => {
+    const longTargetContent = Array.from(
+      { length: 40 },
+      (_, index) =>
+        `// comment ${index}\n\nexport const fullContentMarker${index} = "${index}";\n`,
+    ).join("\n");
+    const tempDir = await createTempFixture({
+      "target.ts": longTargetContent,
+      "minify-patterns.txt": "target.ts\n",
+    });
+
+    try {
+      const regular = await runCLIProcess(["--stdout"], tempDir);
+      const minified = await runCLIProcess(
+        ["--stdout", "--minify-file", "minify-patterns.txt"],
+        tempDir,
+      );
+
+      expect(regular.code).toBe(0);
+      expect(minified.code).toBe(0);
+      expect(minified.stderr).toBe("");
+      expect(regular.stdout).toContain("fullContentMarker0");
+      expect(minified.stdout).toContain("# target.ts");
+      expect(minified.stdout).toContain("This is a minified file");
+      expect(minified.stdout).not.toContain("fullContentMarker0");
+      expect(minified.stdoutBuffer.length).toBeLessThan(
+        regular.stdoutBuffer.length,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  // harness:criterion=c-stdout-whitespace-removal-respected
+  it("applies whitespace removal when writing digest content to stdout", async () => {
+    const originalSource =
+      "function test() {\n    const value    =    1;    \n\n    const other = 2;\n}\n";
+    const tempDir = await createTempFixture({
+      "whitespace.ts": originalSource,
+    });
+
+    try {
+      const regular = await runCLIProcess(["--stdout"], tempDir);
+      const stripped = await runCLIProcess(
+        ["--stdout", "--whitespace-removal"],
+        tempDir,
+      );
+
+      expect(regular.code).toBe(0);
+      expect(stripped.code).toBe(0);
+      expect(stripped.stderr).toBe("");
+      expect(regular.stdout).toContain(originalSource);
+      expect(stripped.stdout).toContain(
+        "function test() { const value = 1; const other = 2; }",
+      );
+      expect(stripped.stdoutBuffer.length).toBeLessThan(
+        regular.stdoutBuffer.length,
+      );
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  // harness:criterion=c-stdout-digest-byte-preserved
+  it("matches stdout digest bytes to the file-output digest bytes", async () => {
+    const tempDir = await createTempFixture({
+      "same.ts": "export const bytePreserved = true;\n",
+      "nested/readme.md": "## Nested content\n",
+    });
+    const outputPath = path.join(tempDir, "digest-output.md");
+
+    try {
+      const stdoutResult = await runCLIProcess(["--stdout"], tempDir);
+      const fileResult = await runCLIProcess(
+        ["--output", outputPath],
+        tempDir,
+      );
+      const fileBuffer = await fs.readFile(outputPath);
+
+      expect(stdoutResult.code).toBe(0);
+      expect(fileResult.code).toBe(0);
+      expect(stdoutResult.stdoutBuffer.equals(fileBuffer)).toBe(true);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  // harness:criterion=c-stdout-pipeable
+  it("provides stdout bytes that can be consumed by a pipe", async () => {
+    const tempDir = await createTempFixture({
+      "pipe.ts": "export const pipeable = true;\n",
+    });
+    const cliCommand = `${shellQuote(tsNodePath)} ${shellQuote(cliPath)}`;
+
+    try {
+      const direct = await runCLIProcess(["--stdout"], tempDir);
+      const { stdout: pipedByteCount } = await execInFixture(
+        `${cliCommand} --stdout | wc -c`,
+        tempDir,
+      );
+      const { stdout: headingCount } = await execInFixture(
+        `${cliCommand} --stdout | grep -c '^#'`,
+        tempDir,
+      );
+
+      expect(direct.code).toBe(0);
+      expect(direct.stdoutBuffer.length).toBeGreaterThan(0);
+      expect(Number.parseInt(String(pipedByteCount).trim(), 10)).toBe(
+        direct.stdoutBuffer.length,
+      );
+      expect(
+        Number.parseInt(String(headingCount).trim(), 10),
+      ).toBeGreaterThanOrEqual(1);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }, 15000);
+
+  // harness:criterion=c-readme-stdout-documented
+  it("documents the stdout flag in the README options table", async () => {
+    const readme = await fs.readFile(
+      path.resolve(__dirname, "..", "README.md"),
+      "utf-8",
+    );
+
+    expect(readme.split(/\r?\n/)).toContainEqual(
+      expect.stringMatching(/\|.*`--stdout`.*\|/),
+    );
+  });
+
+  // harness:criterion=c-readme-watch-incompatibility-noted
+  it("documents that stdout mode cannot be combined with watch mode", async () => {
+    const readme = await fs.readFile(
+      path.resolve(__dirname, "..", "README.md"),
+      "utf-8",
+    );
+    const lines = readme.split(/\r?\n/);
+    const stdoutWatchLine = lines.findIndex(
+      (line) =>
+        line.includes("--stdout") &&
+        line.includes("--watch") &&
+        /cannot|incompatible/i.test(line),
+    );
+
+    expect(stdoutWatchLine).toBeGreaterThanOrEqual(0);
+  });
+
+  // harness:criterion=c-readme-pipeline-example
+  it("documents a stdout shell pipeline example", async () => {
+    const readme = await fs.readFile(
+      path.resolve(__dirname, "..", "README.md"),
+      "utf-8",
+    );
+
+    expect(readme).toMatch(/--stdout.*\|/);
+  });
+
+  // harness:criterion=c-package-minor-version-bumped
+  it("bumps package.json by one minor version with a zero patch", async () => {
+    const packageJsonPath = path.resolve(__dirname, "..", "package.json");
+    const currentPackage = JSON.parse(
+      await fs.readFile(packageJsonPath, "utf-8"),
+    );
+    const { stdout: previousPackageJson } = await execAsync(
+      "git show HEAD:package.json",
+      { cwd: path.resolve(__dirname, "..") },
+    );
+    const previousPackage = JSON.parse(previousPackageJson);
+    const [currentMajor, currentMinor, currentPatch] = currentPackage.version
+      .split(".")
+      .map(Number);
+    const [previousMajor, previousMinor] = previousPackage.version
+      .split(".")
+      .map(Number);
+
+    expect(currentMajor).toBe(previousMajor);
+    expect(currentMinor).toBe(previousMinor + 1);
+    expect(currentPatch).toBe(0);
+  });
 });

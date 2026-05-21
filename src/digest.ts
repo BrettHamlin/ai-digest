@@ -321,9 +321,11 @@ This is a minified file of type: ${extension ? "." + extension.toLowerCase() : "
 
           // Skip files larger than 500MB to avoid string length issues
           if (stats.size > 500 * 1024 * 1024) {
-            console.warn(
-              `⚠️  Skipping large file: ${displayPath} (${fileSizeMB.toFixed(2)} MB)`
-            );
+            if (!silent) {
+              console.warn(
+                `⚠️  Skipping large file: ${displayPath} (${fileSizeMB.toFixed(2)} MB)`
+              );
+            }
             fileContent = `# ${displayPath}\n\nThis file was skipped because it is too large (${fileSizeMB.toFixed(2)} MB) to process safely.\n\n`;
             skippedFiles++;
             continue;
@@ -333,7 +335,9 @@ This is a minified file of type: ${extension ? "." + extension.toLowerCase() : "
           try {
             content = await fs.readFile(fullPath, "utf-8");
           } catch (error) {
-            console.error(`❌ Error reading file ${displayPath}:`, error);
+            if (!silent) {
+              console.error(`❌ Error reading file ${displayPath}:`, error);
+            }
             const errorMessage =
               error instanceof Error ? error.message : String(error);
             fileContent = `# ${displayPath}\n\nError reading this file: ${errorMessage}\n\n`;

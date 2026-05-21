@@ -39,15 +39,20 @@ For best results, re-upload the Markdown file before starting a new chat session
 
 ## Options
 
-- `-i, --input <directories...>`: Specify input directories (multiple allowed, default: current directory)
-- `-o, --output <file>`: Specify output file (default: codebase.md)
-- `--no-default-ignores`: Disable default ignore patterns
-- `--whitespace-removal`: Enable whitespace removal
-- `--show-output-files [sort]`: Display a list of files with size statistics and bar charts. Add `sort` to sort by file size.
-- `--ignore-file <file>`: Specify a custom ignore file (default: .aidigestignore)
-- `--minify-file <file>`: Specify a custom minify file (default: .aidigestminify)
-- `--watch`: Enable watch mode to automatically rebuild when files change
-- `--help`: Show help
+| Option | Description |
+| --- | --- |
+| `-i, --input <directories...>` | Specify input directories (multiple allowed, default: current directory) |
+| `-o, --output <file>` | Specify output file (default: codebase.md) |
+| `--no-default-ignores` | Disable default ignore patterns |
+| `--whitespace-removal` | Enable whitespace removal |
+| `--show-output-files [sort]` | Display a list of files with size statistics and bar charts. Add `sort` to sort by file size. |
+| `--ignore-file <file>` | Specify a custom ignore file (default: .aidigestignore) |
+| `--minify-file <file>` | Specify a custom minify file (default: .aidigestminify) |
+| `--stdout` | Write raw digest content to stdout without creating or overwriting an output file |
+| `--watch` | Enable watch mode to automatically rebuild when files change |
+| `--help` | Show help |
+
+Note: `--stdout` cannot be combined with `--watch`; stdout mode is a single-shot output mode intended for pipes and scripts.
 
 ## Examples
 
@@ -89,13 +94,19 @@ For best results, re-upload the Markdown file before starting a new chat session
    npx ai-digest --watch
    ```
 
-7. Use custom minify file:
+7. Pipe digest content to another command:
+
+   ```bash
+   npx ai-digest --stdout | wc -c
+   ```
+
+8. Use custom minify file:
 
    ```bash
    npx ai-digest --minify-file .myminifypatterns
    ```
 
-8. Combine multiple options:
+9. Combine multiple options:
 
    ```bash
    npx ai-digest -i /path/to/your/project -o project_summary.md --whitespace-removal --show-output-files sort --watch
