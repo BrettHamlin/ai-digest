@@ -505,6 +505,37 @@ describe("AI Digest CLI", () => {
     }
   }, 15000);
 
+  it("should preserve exact stdout content when an output path matches an input file", async () => {
+    //harness:criterion=c-stdout-digest-content-only-on-stdout,c-stdout-preserves-content-bytes,c-stdout-output-file-not-excluded-from-processing
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-digest-stdout-output-exact-test-")
+    );
+
+    try {
+      await fs.writeFile(path.join(tempRoot, "custom.md"), "keep me");
+      await fs.writeFile(path.join(tempRoot, "source.txt"), "source content");
+
+      const { content } = await generateDigestContent({
+        inputDirs: [tempRoot],
+        outputFilePath: null,
+        silent: true,
+      });
+
+      const result = await runCLIProcess(
+        ["--stdout", "--output", "custom.md", "--input", tempRoot],
+        { cwd: tempRoot }
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout.equals(Buffer.from(content))).toBe(true);
+      expect(result.stdout.toString("utf-8")).toContain("# custom.md");
+      expect(result.stdout.toString("utf-8")).toContain("keep me");
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 15000);
+
   it("should write stdout mode errors only to stderr", async () => {
     //harness:criterion=c-stdout-errors-go-to-stderr
     const tempRoot = await fs.mkdtemp(
