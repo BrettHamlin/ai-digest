@@ -39,15 +39,20 @@ For best results, re-upload the Markdown file before starting a new chat session
 
 ## Options
 
-- `-i, --input <directories...>`: Specify input directories (multiple allowed, default: current directory)
-- `-o, --output <file>`: Specify output file (default: codebase.md)
-- `--no-default-ignores`: Disable default ignore patterns
-- `--whitespace-removal`: Enable whitespace removal
-- `--show-output-files [sort]`: Display a list of files with size statistics and bar charts. Add `sort` to sort by file size.
-- `--ignore-file <file>`: Specify a custom ignore file (default: .aidigestignore)
-- `--minify-file <file>`: Specify a custom minify file (default: .aidigestminify)
-- `--watch`: Enable watch mode to automatically rebuild when files change
-- `--help`: Show help
+| Option | Description |
+| --- | --- |
+| `-i, --input <directories...>` | Specify input directories (multiple allowed, default: current directory) |
+| `-o, --output <file>` | Specify output file (default: codebase.md) |
+| `--stdout` | Write the generated digest content to stdout without creating or overwriting an output file |
+| `--no-default-ignores` | Disable default ignore patterns |
+| `--whitespace-removal` | Enable whitespace removal |
+| `--show-output-files [sort]` | Display a list of files with size statistics and bar charts. Add `sort` to sort by file size. |
+| `--ignore-file <file>` | Specify a custom ignore file (default: .aidigestignore) |
+| `--minify-file <file>` | Specify a custom minify file (default: .aidigestminify) |
+| `--watch` | Enable watch mode to automatically rebuild when files change |
+| `--help` | Show help |
+
+Note: `--stdout` is incompatible with `--watch`. Combining them is rejected with an error message on stderr and a non-zero exit code.
 
 ## Examples
 
@@ -95,7 +100,19 @@ For best results, re-upload the Markdown file before starting a new chat session
    npx ai-digest --minify-file .myminifypatterns
    ```
 
-8. Combine multiple options:
+8. Pipe digest content to another command without writing `codebase.md`:
+
+   ```bash
+   npx ai-digest --stdout | pbcopy
+   ```
+
+9. Redirect digest content to a custom file using your shell:
+
+   ```bash
+   npx ai-digest --stdout > project_summary.md
+   ```
+
+10. Combine multiple options:
 
    ```bash
    npx ai-digest -i /path/to/your/project -o project_summary.md --whitespace-removal --show-output-files sort --watch

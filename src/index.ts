@@ -149,8 +149,13 @@ if (require.main === module) {
       [getActualWorkingDirectory()],
     )
     .option("-o, --output <file>", "Output file name", "codebase.md")
+    .option(
+      "--stdout",
+      "Write digest content to stdout without creating or overwriting an output file",
+    )
     .option("--no-default-ignores", "Disable default ignore patterns")
     .option("--whitespace-removal", "Enable whitespace removal")
+    .option("--remove-whitespace", "Alias for --whitespace-removal")
     .option(
       "--show-output-files [sort]",
       "Display a list of files included in the output, optionally sorted by size ('sort')",
@@ -171,14 +176,37 @@ if (require.main === module) {
       const outputFile = path.isAbsolute(options.output)
         ? options.output
         : path.join(getActualWorkingDirectory(), options.output);
+      const removeWhitespaceFlag =
+        options.whitespaceRemoval || options.removeWhitespace;
 
-      if (options.watch) {
+      if (options.stdout && options.watch) {
+        console.error("Error: --stdout is incompatible with --watch.");
+        process.exit(1);
+      }
+
+      if (options.stdout) {
+        try {
+          const { content } = await generateDigestContent({
+            inputDirs,
+            outputFilePath: outputFile,
+            useDefaultIgnores: options.defaultIgnores,
+            removeWhitespaceFlag,
+            ignoreFile: options.ignoreFile,
+            minifyFile: options.minifyFile,
+            silent: true,
+          });
+          process.stdout.write(content);
+        } catch (error) {
+          console.error(error);
+          process.exit(1);
+        }
+      } else if (options.watch) {
         // Run in watch mode
         await watchFiles(
           inputDirs,
           outputFile,
           options.defaultIgnores,
-          options.whitespaceRemoval,
+          removeWhitespaceFlag,
           options.showOutputFiles,
           options.ignoreFile,
           options.minifyFile,
@@ -190,7 +218,7 @@ if (require.main === module) {
           inputDirs,
           outputFile,
           options.defaultIgnores,
-          options.whitespaceRemoval,
+          removeWhitespaceFlag,
           options.showOutputFiles,
           options.ignoreFile,
           options.minifyFile,
