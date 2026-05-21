@@ -14,6 +14,26 @@ import {
 } from "./digest";
 import { MinifyFileDescriptionCallback, ProcessedFile } from "./types";
 
+function resolveRuntimePath(filePath: string): string {
+  try {
+    return fsSync.realpathSync(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
+function isCliEntryPoint(): boolean {
+  if (require.main === module) {
+    return true;
+  }
+
+  const entryPoint = process.argv[1];
+  return (
+    typeof entryPoint === "string" &&
+    resolveRuntimePath(entryPoint) === resolveRuntimePath(__filename)
+  );
+}
+
 // Main library function
 export async function generateDigest(
   options: {
@@ -135,7 +155,7 @@ export async function generateDigestFiles(
 }
 
 // CLI functionality
-if (require.main === module) {
+if (isCliEntryPoint()) {
   // Read package.json to get the version
   const packageJsonPath = path.join(__dirname, "..", "package.json");
   const packageJson = JSON.parse(fsSync.readFileSync(packageJsonPath, "utf-8"));

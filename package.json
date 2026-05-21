@@ -2,6 +2,7 @@
   "name": "ai-digest",
   "version": "1.5.1",
   "description": "CLI tool to aggregate files into a single Markdown file",
+  "type": "commonjs",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {

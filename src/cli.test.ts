@@ -30,7 +30,11 @@ const runCLIProcess = async (
 ): Promise<{ stdout: Buffer; stderr: string; code: number | null }> => {
   const cliPath = path.resolve(__dirname, "index.ts");
   const tsNodeRegister = require.resolve("ts-node/register");
-  const childEnv = { ...process.env, ...options.env };
+  const childEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    TS_NODE_PROJECT: path.resolve(__dirname, "..", "tsconfig.json"),
+    ...options.env,
+  };
 
   if (options.cwd && options.env?.INIT_CWD === undefined) {
     childEnv.INIT_CWD = options.cwd;
@@ -535,6 +539,93 @@ describe("AI Digest CLI", () => {
       await fs.rm(tempRoot, { recursive: true, force: true });
     }
   }, 15000);
+
+  it("should pass silent mode and no output path to digest generation in stdout mode", async () => {
+    //harness:criterion=c-stdout-silent-mode-used,c-stdout-output-file-not-excluded-from-processing
+    const tempRoot = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ai-digest-stdout-call-test-")
+    );
+    const cliPath = path.resolve(__dirname, "index.ts");
+    const digestPath = path.resolve(__dirname, "digest.ts");
+    const tsNodeRegister = require.resolve("ts-node/register");
+    const invocationPath = path.join(tempRoot, "invocation.json");
+
+    try {
+      const script = `
+        const fs = require("fs");
+        require(${JSON.stringify(tsNodeRegister)});
+        const digestPath = ${JSON.stringify(digestPath)};
+        require.cache[digestPath] = {
+          id: digestPath,
+          filename: digestPath,
+          loaded: true,
+          exports: {
+            generateDigestContent: async (options) => {
+              fs.writeFileSync(${JSON.stringify(invocationPath)}, JSON.stringify(options));
+              return { content: "mock digest content", stats: {} };
+            },
+            processFiles: async () => { throw new Error("processFiles should not be called"); },
+            writeDigestToFile: async () => { throw new Error("writeDigestToFile should not be called"); },
+            watchFiles: async () => { throw new Error("watchFiles should not be called"); },
+            aggregateFiles: async () => { throw new Error("aggregateFiles should not be called"); },
+            getFileStats: () => ({})
+          }
+        };
+        process.argv = [
+          process.execPath,
+          ${JSON.stringify(cliPath)},
+          "--stdout",
+          "--output",
+          "custom.md",
+          "--input",
+          ${JSON.stringify(tempRoot)}
+        ];
+        require(${JSON.stringify(cliPath)});
+      `;
+      const result = await new Promise<{
+        stdout: Buffer;
+        stderr: string;
+        code: number | null;
+      }>((resolve, reject) => {
+        const child = spawn(process.execPath, ["-e", script], {
+          cwd: tempRoot,
+          env: {
+            ...process.env,
+            TS_NODE_PROJECT: path.resolve(__dirname, "..", "tsconfig.json"),
+            INIT_CWD: tempRoot,
+          },
+        });
+        const stdoutChunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
+
+        child.stdout.on("data", (chunk) =>
+          stdoutChunks.push(Buffer.from(chunk))
+        );
+        child.stderr.on("data", (chunk) =>
+          stderrChunks.push(Buffer.from(chunk))
+        );
+        child.on("error", reject);
+        child.on("close", (code) => {
+          resolve({
+            stdout: Buffer.concat(stdoutChunks),
+            stderr: Buffer.concat(stderrChunks).toString("utf-8"),
+            code,
+          });
+        });
+      });
+      const invocation = JSON.parse(
+        await fs.readFile(invocationPath, "utf-8")
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout.toString("utf-8")).toBe("mock digest content");
+      expect(invocation.silent).toBe(true);
+      expect(invocation.outputFilePath).toBeNull();
+    } finally {
+      await fs.rm(tempRoot, { recursive: true, force: true });
+    }
+  }, 10000);
 
   it("should write stdout mode errors only to stderr", async () => {
     //harness:criterion=c-stdout-errors-go-to-stderr
