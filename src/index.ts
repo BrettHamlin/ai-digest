@@ -14,6 +14,30 @@ import {
 } from "./digest";
 import { MinifyFileDescriptionCallback, ProcessedFile } from "./types";
 
+async function writeToStdout(content: string): Promise<void> {
+  if (process.stdout.write(content)) {
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const onDrain = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      process.stdout.off("drain", onDrain);
+      process.stdout.off("error", onError);
+    };
+
+    process.stdout.once("drain", onDrain);
+    process.stdout.once("error", onError);
+  });
+}
+
 // Main library function
 export async function generateDigest(
   options: {
@@ -165,12 +189,39 @@ if (require.main === module) {
       "Custom minify file name",
       ".aidigestminify",
     )
+    .option("--stdout", "Write digest content to stdout instead of a file")
     .option("--watch", "Watch for file changes and rebuild automatically")
     .action(async (options) => {
+      if (options.stdout && options.watch) {
+        console.error("Error: --stdout is incompatible with --watch.");
+        process.exit(1);
+      }
+
       const inputDirs = options.input.map((dir: string) => path.resolve(dir));
       const outputFile = path.isAbsolute(options.output)
         ? options.output
         : path.join(getActualWorkingDirectory(), options.output);
+
+      if (options.stdout) {
+        try {
+          const { content } = await generateDigestContent({
+            inputDirs,
+            outputFilePath: outputFile,
+            useDefaultIgnores: options.defaultIgnores,
+            removeWhitespaceFlag: options.whitespaceRemoval,
+            ignoreFile: options.ignoreFile,
+            minifyFile: options.minifyFile,
+            silent: true,
+          });
+
+          await writeToStdout(content);
+        } catch (error) {
+          console.error("Error generating digest:", error);
+          process.exit(1);
+        }
+
+        return;
+      }
 
       if (options.watch) {
         // Run in watch mode
